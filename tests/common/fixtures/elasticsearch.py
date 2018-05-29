@@ -20,22 +20,15 @@ def es_client(delete_all_elasticsearch_documents):
 @pytest.fixture(scope="session", autouse=True)
 def init_elasticsearch(request):
     """Initialize the test Elasticsearch index once per test session."""
-    client = _es_client()
+    es_client = _es_client()
+    # Initialize the test search index.
+    search.init(es_client)
 
-    def maybe_delete_index():
-        """Delete the test index if it exists."""
-        if client.conn.indices.exists(index=ELASTICSEARCH_INDEX):
-            client.conn.indices.delete(index=ELASTICSEARCH_INDEX)
+    yield es_client
 
     # Delete the test search index at the end of the test run.
-    request.addfinalizer(maybe_delete_index)
-
-    # Delete the test search index at the start of the run, just in case it
-    # was somehow left behind by a previous test run.
-    maybe_delete_index()
-
-    # Initialize the test search index.
-    search.init(client)
+    if es_client.conn.indices.exists(index=ELASTICSEARCH_INDEX):
+        es_client.conn.indices.delete(index=ELASTICSEARCH_INDEX)
 
 
 @pytest.fixture
