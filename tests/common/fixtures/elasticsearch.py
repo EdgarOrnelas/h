@@ -36,17 +36,6 @@ def init_elasticsearch(request):
         es_client.conn.indices.delete(index=ELASTICSEARCH_INDEX)
 
 
-@pytest.fixture
-def delete_all_elasticsearch_documents(request):
-    """Delete everything from the test search index after each test."""
-    client = _es_client()
-
-    def delete_everything():
-        client.conn.delete_by_query(index=client.index, body={"query": {"match_all": {}}})
-
-    request.addfinalizer(delete_everything)
-
-
 def _es_client():
     """Return a :py:class:`h.search.client.Client` for the test search index."""
     return search.get_client({"es.host": ELASTICSEARCH_HOST, "es.index": ELASTICSEARCH_INDEX})
