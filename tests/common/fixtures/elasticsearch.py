@@ -12,9 +12,14 @@ ELASTICSEARCH_INDEX = "hypothesis-test"
 
 
 @pytest.fixture
-def es_client(delete_all_elasticsearch_documents):
+def es_client():
     """A :py:class:`h.search.client.Client` for the test search index."""
-    return _es_client()
+    client = _es_client()
+
+    yield client
+
+    # Delete everything from the test search index after each test.
+    client.conn.delete_by_query(index=client.index, body={"query": {"match_all": {}}})
 
 
 @pytest.fixture(scope="session", autouse=True)
