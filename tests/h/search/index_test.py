@@ -3,7 +3,9 @@ from __future__ import unicode_literals
 
 import datetime
 
+import elasticsearch1
 import elasticsearch1_dsl
+import logging
 import mock
 import pytest
 
@@ -50,7 +52,8 @@ class TestIndex(object):
         # index directly and uses this ``document`` field.
         assert get(annotation.id)["document"]["web_uri"] == "https://example.com/example_article"
 
-    def test_it_can_index_an_annotation_with_a_document_with_no_web_uri(self, factories, index, get):
+    def test_it_can_index_an_annotation_with_a_document_with_no_web_uri(self, factories,
+                                                                        index, get):
         annotation = factories.Annotation.build(
             document=factories.Document.build(web_uri=None),
         )
@@ -79,7 +82,8 @@ class TestIndex(object):
 
         assert "title" not in get(annotation.id)["document"]
 
-    def test_it_notifies(self, AnnotationTransformEvent, factories, pyramid_request, notify, index, search):
+    def test_it_notifies(self, AnnotationTransformEvent, factories, pyramid_request,
+                         notify, index, search):
         annotation = factories.Annotation.build(userid="acct:someone@example.com")
 
         index(annotation)
@@ -150,8 +154,10 @@ class TestIndex(object):
 
         response = search.execute()
 
-        user_bucket_1 = next(bucket for bucket in response.aggregations.user_raw_terms.buckets if bucket["key"] == "acct:someone@example.com")
-        user_bucket_2 = next(bucket for bucket in response.aggregations.user_raw_terms.buckets if bucket["key"] == "acct:Someone@example.com")
+        user_bucket_1 = next(bucket for bucket in response.aggregations.user_raw_terms.buckets if
+            bucket["key"] == "acct:someone@example.com")
+        user_bucket_2 = next(bucket for bucket in response.aggregations.user_raw_terms.buckets if
+             bucket["key"] == "acct:Someone@example.com")
 
         assert user_bucket_1["doc_count"] == 1
         assert user_bucket_2["doc_count"] == 1
@@ -179,8 +185,10 @@ class TestIndex(object):
 
         response = search.execute()
 
-        tag_bucket_1 = next(bucket for bucket in response.aggregations.tags_raw_terms.buckets if bucket["key"] == "Hello")
-        tag_bucket_2 = next(bucket for bucket in response.aggregations.tags_raw_terms.buckets if bucket["key"] == "hello")
+        tag_bucket_1 = next(bucket for bucket in response.aggregations.tags_raw_terms.buckets if
+            bucket["key"] == "Hello")
+        tag_bucket_2 = next(bucket for bucket in response.aggregations.tags_raw_terms.buckets if
+            bucket["key"] == "hello")
 
         assert tag_bucket_1["doc_count"] == 1
         assert tag_bucket_2["doc_count"] == 1
@@ -308,6 +316,86 @@ class TestDelete(object):
                                     doc_type="annotation",
                                     id=annotation.id)
         assert result.get('_source').get('deleted') is True
+
+
+class TestBatchIndexer(object):
+    def test_it_indexes_all_annotations(self, db_session, es_client, factories, pyramid_request):
+        annotations = factories.Annotation.create_batch(3)
+        ids = [a.id for a in annotations]
+
+        h.search.index.BatchIndexer(db_session, es_client, pyramid_request, es_client.index).index()
+
+        for id in ids:
+            result = es_client.conn.get(index=es_client.index,
+                                        doc_type="annotation",
+                                        id=id)
+            assert result["_id"] == id
+
+    def test_it_indexes_specific_annotations(self, db_session, es_client,
+                                             factories, pyramid_request):
+        annotations = factories.Annotation.create_batch(5)
+        ids = [a.id for a in annotations]
+        ids_to_index = ids[:3]
+        ids_not_to_index = ids[3:]
+
+        h.search.index.BatchIndexer(
+            db_session, es_client, pyramid_request, es_client.index).index(ids_to_index)
+
+        for id in ids_to_index:
+            result = es_client.conn.get(index=es_client.index,
+                                        doc_type="annotation",
+                                        id=id)
+            assert result["_id"] == id
+
+        for id in ids_not_to_index:
+            with pytest.raises(elasticsearch1.exceptions.NotFoundError):
+                result = es_client.conn.get(index=es_client.index,
+                                            doc_type="annotation",
+                                            id=id)
+
+    def test_it_logs_indexing_status(self, caplog, db_session, es_client,
+                                     factories, pyramid_request):
+        annotations = factories.Annotation.create_batch(200)
+        ids = [a.id for a in annotations]
+
+        with caplog.at_level(logging.INFO):
+            h.search.index.BatchIndexer(db_session, es_client, pyramid_request,
+                                        es_client.index).index(ids, 5)
+            for record in caplog.records[:len(caplog.records) - 1]:
+                if record.filename == 'index.py':
+                    assert 'indexed 0k annotations, rate=' in record.msg
+
+    def test_it_returns_errored_annotation_ids(self, db_session, es_client,
+                                               factories, pyramid_request):
+        annotations = factories.Annotation.create_batch(3)
+        expected_errored_ids = set([annotations[0].id, annotations[2].id])
+
+        elasticsearch1.helpers.streaming_bulk = mock.Mock()
+        elasticsearch1.helpers.streaming_bulk.return_value = [
+            (False, {'index': {'error': 'some error', '_id': annotations[0].id}}),
+            (True, {}),
+            (False, {'index': {'error': 'some error', '_id': annotations[2].id}})]
+
+        errored = h.search.index.BatchIndexer(db_session, es_client, pyramid_request,
+                                              es_client.index).index()
+
+        assert errored == expected_errored_ids
+
+    def test_it_does_not_error_annotations_if_already_indexed(self, db_session, es_client,
+                                                              factories, pyramid_request):
+        annotations = factories.Annotation.create_batch(3)
+        expected_errored_ids = set([annotations[1].id])
+
+        elasticsearch1.helpers.streaming_bulk = mock.Mock()
+        elasticsearch1.helpers.streaming_bulk.return_value = [
+            (True, {}),
+            (False, {'create': {'error': 'some error', '_id': annotations[1].id}}),
+            (False, {'create': {'error': 'document already exists', '_id': annotations[2].id}})]
+
+        errored = h.search.index.BatchIndexer(db_session, es_client,
+                                              pyramid_request, es_client.index, 'create').index()
+
+        assert errored == expected_errored_ids
 
 
 class SearchResponseWithIDs(Matcher):

@@ -107,7 +107,7 @@ class BatchIndexer(object):
         else:
             self._target_index = target_index
 
-    def index(self, annotation_ids=None):
+    def index(self, annotation_ids=None, windowsize=PG_WINDOW_SIZE, chunk_size=ES_CHUNK_SIZE):
         """
         Reindex annotations.
 
@@ -118,17 +118,16 @@ class BatchIndexer(object):
         :rtype: set
         """
         if not annotation_ids:
-            annotations = _all_annotations(session=self.session,
-                                           windowsize=PG_WINDOW_SIZE)
+            annotations = _all_annotations(session=self.session, windowsize=windowsize)
         else:
             annotations = _filtered_annotations(session=self.session,
                                                 ids=annotation_ids)
 
         # Report indexing status as we go
-        annotations = _log_status(annotations, log_every=PG_WINDOW_SIZE)
+        annotations = _log_status(annotations, windowsize)
 
         indexing = es_helpers.streaming_bulk(self.es_client.conn, annotations,
-                                             chunk_size=ES_CHUNK_SIZE,
+                                             chunk_size=chunk_size,
                                              raise_on_error=False,
                                              expand_action_callback=self._prepare)
         errored = set()
